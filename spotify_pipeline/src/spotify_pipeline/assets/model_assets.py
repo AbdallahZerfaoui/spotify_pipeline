@@ -1,10 +1,7 @@
-"""Model training and evaluation assets."""
-
 from pathlib import Path
-from typing import Any, Dict
 import pickle
 import json
-
+from typing import Any, Dict
 import pandas as pd
 from dagster import AssetIn, Output, asset
 from sklearn.metrics import classification_report, accuracy_score
@@ -27,7 +24,6 @@ def xgboost_model(context, split_data: Dict[str, Any]) -> Output[Dict[str, Any]]
     
     context.log.info(f"Training XGBoost with {X_train.shape[0]} samples, {X_train.shape[1]} features")
     
-    # Train model with parameters from notebook
     model = XGBClassifier(
         random_state=SEED,
         objective='binary:logistic',
@@ -42,12 +38,10 @@ def xgboost_model(context, split_data: Dict[str, Any]) -> Output[Dict[str, Any]]
     
     model.fit(X_train, y_train)
     
-    # Evaluate
     predictions = model.predict(X_test)
     accuracy = accuracy_score(y_test, predictions)
     report = classification_report(y_test, predictions, output_dict=True)
     
-    # Save model
     file_config = context.resources.file_config
     models_dir = file_config.models_path
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -58,7 +52,6 @@ def xgboost_model(context, split_data: Dict[str, Any]) -> Output[Dict[str, Any]]
     
     context.log.info(f"✅ Model saved to: {model_path}")
     
-    # Save human-readable metadata as JSON
     metadata_dict = {
         "model_type": "XGBoost Classifier",
         "hyperparameters": {
@@ -123,11 +116,9 @@ def model_predictions(context, model_info: Dict[str, Any], split_data: Dict[str,
     X_test = split_data["X_test"]
     y_test = split_data["y_test"]
     
-    # Get predictions and probabilities
     predictions = model.predict(X_test)
     probabilities = model.predict_proba(X_test)
     
-    # Create DataFrame with results
     predictions_df = pd.DataFrame({
         'actual': y_test.values,
         'predicted': predictions,
@@ -136,7 +127,6 @@ def model_predictions(context, model_info: Dict[str, Any], split_data: Dict[str,
         'correct': (y_test.values == predictions).astype(int)
     })
     
-    # Calculate class-specific accuracy
     class_0_mask = predictions_df['actual'] == 0
     class_1_mask = predictions_df['actual'] == 1
     
@@ -150,7 +140,6 @@ def model_predictions(context, model_info: Dict[str, Any], split_data: Dict[str,
     context.log.info(f"Class 0 accuracy: {class_0_correct}/{class_0_total} ({100*class_0_correct/class_0_total:.2f}%)")
     context.log.info(f"Class 1 accuracy: {class_1_correct}/{class_1_total} ({100*class_1_correct/class_1_total:.2f}%)")
     
-    # Save predictions to CSV
     file_config = context.resources.file_config
     models_dir = file_config.models_path
     predictions_path = models_dir / "test_predictions.csv"

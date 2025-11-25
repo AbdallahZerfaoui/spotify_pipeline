@@ -2,7 +2,7 @@
 
 from dagster import ConfigurableResource
 from pathlib import Path
-
+from dagster import IOManager, io_manager
 
 class FileConfig(ConfigurableResource):
     """Configuration for file paths in the pipeline."""
@@ -23,3 +23,17 @@ class FileConfig(ConfigurableResource):
     def models_path(self) -> Path:
         """Get the models directory as a Path object."""
         return Path(self.models_dir).expanduser().resolve()
+
+@io_manager
+def custom_io_manager():
+    """Custom I/O manager for handling data input and output."""
+    class CustomIOManager(IOManager):
+        def handle_output(self, context, obj):
+            # Implement logic to handle output
+            pass
+        
+        def load_input(self, context):
+            # Implement logic to load input
+            pass
+    
+    return CustomIOManager()

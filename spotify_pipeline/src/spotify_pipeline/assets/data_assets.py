@@ -1,7 +1,4 @@
-# src/spotify_pipeline/assets/data_assets.py
-
-"""
-Assets responsible for:
+"""Assets responsible for:
 - Loading the raw Kaggle CSV
 - Cleaning / preprocessing
 - Feature engineering
