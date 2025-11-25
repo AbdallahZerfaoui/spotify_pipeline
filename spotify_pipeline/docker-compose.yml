@@ -3,7 +3,7 @@ services:
   dagster:
     build:
       context: .
-      dockerfile: Dockerfile.dagster
+      dockerfile: docker/Dockerfile.dagster
     container_name: spotify_dagster
     ports:
       - "3000:3000"  # Dagster UI
@@ -31,7 +31,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile.api
+      dockerfile: docker/Dockerfile.api
     container_name: spotify_api
     ports:
       - "8000:8000"  # FastAPI

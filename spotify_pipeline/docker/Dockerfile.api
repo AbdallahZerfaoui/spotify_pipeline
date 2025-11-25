@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
 
 # Copy project files first
 COPY pyproject.toml ./
-COPY api.py ./
+COPY src/api/api.py ./
 COPY src/ ./src/
 
 # Install uv and dependencies
