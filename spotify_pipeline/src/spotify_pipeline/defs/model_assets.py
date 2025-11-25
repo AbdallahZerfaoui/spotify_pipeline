@@ -45,9 +45,9 @@ def xgboost_model(context, split_data: Dict[str, Any]) -> Output[Dict[str, Any]]
         colsample_bytree=0.8,
         learning_rate=0.1,
         max_depth=6,
-        n_estimators=600,
+        n_estimators=1000,
         subsample=0.9,
-        scale_pos_weight=30,
+        scale_pos_weight=6,
         n_jobs=-1
     )
     
@@ -73,12 +73,12 @@ def xgboost_model(context, split_data: Dict[str, Any]) -> Output[Dict[str, Any]]
     metadata_dict = {
         "model_type": "XGBoost Classifier",
         "hyperparameters": {
-            "n_estimators": 600,
+            "n_estimators": 1000,
             "max_depth": 6,
             "learning_rate": 0.1,
             "colsample_bytree": 0.8,
             "subsample": 0.9,
-            "scale_pos_weight": 30,
+            "scale_pos_weight": 6,
             "random_state": SEED,
         },
         "performance": {
