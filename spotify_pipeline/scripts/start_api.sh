@@ -8,8 +8,30 @@ echo ""
 
 # Set XGBoost library path for macOS
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    export DYLD_LIBRARY_PATH=~/homebrew/opt/libomp/lib:$DYLD_LIBRARY_PATH
-    echo "✅ XGBoost library path configured for macOS"
+    LIBOMP_PATH=""
+    if command -v brew &>/dev/null; then
+        LIBOMP_PREFIX="$(brew --prefix libomp 2>/dev/null || true)"
+        if [[ -n "$LIBOMP_PREFIX" && -d "$LIBOMP_PREFIX/lib" ]]; then
+            LIBOMP_PATH="$LIBOMP_PREFIX/lib"
+        fi
+    fi
+
+    # Fallback to common Homebrew locations if brew prefix lookup failed
+    if [[ -z "$LIBOMP_PATH" ]]; then
+        for candidate in /opt/homebrew/opt/libomp/lib /usr/local/opt/libomp/lib "$HOME/homebrew/opt/libomp/lib"; do
+            if [[ -d "$candidate" ]]; then
+                LIBOMP_PATH="$candidate"
+                break
+            fi
+        done
+    fi
+
+    if [[ -n "$LIBOMP_PATH" ]]; then
+        export DYLD_LIBRARY_PATH="$LIBOMP_PATH:${DYLD_LIBRARY_PATH:-}"
+        echo "✅ XGBoost library path configured: $LIBOMP_PATH"
+    else
+        echo "⚠️  libomp not found. Install it with 'brew install libomp' to enable XGBoost."
+    fi
 fi
 
 # Navigate to spotify_pipeline directory
