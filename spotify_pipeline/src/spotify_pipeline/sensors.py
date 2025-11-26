@@ -6,7 +6,7 @@ from dagster import RunRequest, SkipReason, sensor
 
 @sensor(
     job_name="__ASSET_JOB",
-    minimum_interval_seconds=300,
+    minimum_interval_seconds=120,
     required_resource_keys={"file_config"},
 )
 def my_sensor(context):

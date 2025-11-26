@@ -41,12 +41,13 @@ def _find_project_root() -> Path:
     return current.parent if current.name == "spotify_pipeline" else current
 
 
+
 @asset(
     required_resource_keys={"file_config"},
     description="Load the raw Spotify CSV from data folder"
 )
 def raw_spotify_csv(context) -> Output[pd.DataFrame]:
-    """Load Spotify data from CSV file in data/ folder."""
+    """Load and combine all Spotify CSV files from data/ folder."""
     import os
     
     project_root = _find_project_root()
@@ -70,11 +71,58 @@ def raw_spotify_csv(context) -> Output[pd.DataFrame]:
             "Please ensure spotify_data.csv is in the data/ folder."
         )
     
-    csv_path = csv_files[0]
-    context.log.info(f"Loading data from: {csv_path}")
+    # ✅ FIX: Load and combine ALL CSV files with proper header handling
+    context.log.info(f"Found {len(csv_files)} CSV file(s): {sorted([f.name for f in csv_files])}")
     
-    df = pd.read_csv(csv_path)
-    context.log.info(f"Loaded {len(df)} rows with {len(df.columns)} columns")
+    dfs = []
+    for csv_path in sorted(csv_files):
+        try:
+            context.log.info(f"📂 Loading: {csv_path.name}")
+            
+            # Load CSV - explicitly set header row to 0
+            df_temp = pd.read_csv(csv_path, header=0)
+            
+            context.log.info(f"  ✅ Loaded {len(df_temp)} rows × {len(df_temp.columns)} columns")
+            context.log.info(f"  Columns: {list(df_temp.columns)[:10]}...")  # Show first 10 columns
+            
+            # Check for malformed data
+            if len(df_temp.columns) > 100:
+                context.log.warning(f"  ⚠️  WARNING: {len(df_temp.columns)} columns detected!")
+                context.log.warning(f"     This might indicate the CSV has data as column names")
+                context.log.warning(f"     First few column names: {list(df_temp.columns)[:5]}")
+            
+            dfs.append(df_temp)
+            
+        except Exception as e:
+            context.log.error(f"❌ ERROR loading {csv_path.name}: {str(e)}")
+            raise
+    
+    if not dfs:
+        raise ValueError("No valid dataframes loaded!")
+    
+    # Check if all dataframes have the same columns
+    first_columns = set(dfs[0].columns)
+    for i, df_temp in enumerate(dfs[1:], 1):
+        temp_columns = set(df_temp.columns)
+        if temp_columns != first_columns:
+            context.log.warning(f"⚠️  CSV {i} has different columns!")
+            context.log.warning(f"   Missing from this file: {first_columns - temp_columns}")
+            context.log.warning(f"   Extra in this file: {temp_columns - first_columns}")
+    
+    # Combine all dataframes
+    df = pd.concat(dfs, ignore_index=True)
+    context.log.info(f"🔀 Combined {len(dfs)} files:")
+    context.log.info(f"   Total: {len(df)} rows × {len(df.columns)} columns")
+    
+    # Check for duplicate column names
+    if df.columns.duplicated().any():
+        context.log.warning(f"⚠️  Duplicate column names detected!")
+        context.log.warning(f"   Duplicates: {df.columns[df.columns.duplicated()].tolist()}")
+    
+    # Basic data quality checks
+    context.log.info(f"📊 Data Quality:")
+    context.log.info(f"   Total null values: {df.isna().sum().sum()}")
+    context.log.info(f"   Memory usage: {df.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
     
     # Save a readable copy for inspection
     output_dir = data_dir / "dagster_output"
@@ -88,7 +136,8 @@ def raw_spotify_csv(context) -> Output[pd.DataFrame]:
         metadata={
             "rows": len(df),
             "columns": len(df.columns),
-            "source": str(csv_path),
+            "num_files": len(csv_files),
+            "files_combined": sorted([f.name for f in csv_files]),
             "readable_copy": str(output_path),
         },
     )
@@ -104,47 +153,89 @@ def raw_spotify_csv(context) -> Output[pd.DataFrame]:
 )
 def spotify_cleaned(context, df: pd.DataFrame) -> Output[pd.DataFrame]:
     """Clean data: remove nulls, filter zeros, create verdict column."""
-    context.log.info(f"Starting with {len(df)} rows")
+    context.log.info(f"🔍 DIAGNOSTIC START")
+    context.log.info(f"Input shape: {df.shape}")
+    context.log.info(f"Input columns: {list(df.columns)}")
     
     # Drop rows with missing values
+    df_before_null = len(df)
     df = df.dropna()
-    context.log.info(f"After dropping nulls: {len(df)} rows")
+    df_after_null = len(df)
+    context.log.info(f"After dropna(): {df_before_null} → {df_after_null} rows (removed {df_before_null - df_after_null})")
+    
+    if len(df) == 0:
+        context.log.error("❌ ERROR: All rows removed by dropna()!")
+        raise ValueError("All data removed after dropping NaN values")
     
     # Filter out tracks with zero popularity
+    df_before_pop = len(df)
     df = df[df['popularity'] > 0]
-    context.log.info(f"After filtering zero popularity: {len(df)} rows")
+    df_after_pop = len(df)
+    context.log.info(f"After popularity > 0: {df_before_pop} → {df_after_pop} rows (removed {df_before_pop - df_after_pop})")
+    
+    if len(df) == 0:
+        context.log.error("❌ ERROR: All rows removed by popularity filter!")
+        raise ValueError("All data removed after filtering popularity > 0")
     
     # Ensure year column exists
-    if 'year' not in df.columns and 'release_date' in df.columns:
-        df['year'] = pd.to_datetime(df['release_date'], errors='coerce').dt.year
-        df = df.dropna(subset=['year'])
+    context.log.info(f"Checking for 'year' column...")
+    if 'year' not in df.columns:
+        context.log.info(f"'year' not found, checking for 'release_date'...")
+        if 'release_date' in df.columns:
+            context.log.info(f"Converting 'release_date' to 'year'...")
+            df['year'] = pd.to_datetime(df['release_date'], errors='coerce').dt.year
+            df_before_year = len(df)
+            df = df.dropna(subset=['year'])
+            df_after_year = len(df)
+            context.log.info(f"After dropna(subset=['year']): {df_before_year} → {df_after_year} rows (removed {df_before_year - df_after_year})")
+        else:
+            context.log.error("❌ ERROR: Neither 'year' nor 'release_date' column found!")
+            context.log.info(f"Available columns: {list(df.columns)}")
+            raise ValueError("'year' or 'release_date' column required")
+    
+    if len(df) == 0:
+        context.log.error("❌ ERROR: All rows removed by year processing!")
+        raise ValueError("All data removed after year processing")
     
     df['year'] = df['year'].astype(int)
+    context.log.info(f"✅ Year column ready")
     
     # Add artist song count feature
     if 'artist_name' in df.columns and 'track_id' in df.columns:
+        context.log.info(f"Adding 'artist_song_count' feature...")
         df['artist_song_count'] = df.groupby('artist_name')['track_id'].transform('count')
+        context.log.info(f"✅ artist_song_count added")
+    else:
+        context.log.warning(f"⚠️  Cannot add artist_song_count: missing artist_name or track_id")
     
     # Create verdict column (binary target: popular vs not popular)
-    # Using yearly percentile threshold for fairness across years
+    context.log.info(f"Creating 'verdict' column with popularity threshold {POPULARITY_THRESHOLD}%...")
     yearly_thresholds = df.groupby('year')['popularity'].quantile(
         POPULARITY_THRESHOLD / 100
     ).to_dict()
+    context.log.info(f"Yearly thresholds: {yearly_thresholds}")
     
     df['verdict'] = df.apply(
         lambda row: 1 if row['popularity'] >= yearly_thresholds.get(row['year'], POPULARITY_THRESHOLD) else 0,
         axis=1
     )
+    context.log.info(f"✅ verdict column created")
     
     # Add duration-based features
     if 'duration_ms' in df.columns:
+        context.log.info(f"Adding duration-based features...")
         q1 = df['duration_ms'].quantile(0.25)
         q95 = df['duration_ms'].quantile(0.95)
         df['long_duration'] = (df['duration_ms'] > q95).astype(int)
         df['short_duration'] = (df['duration_ms'] < q1).astype(int)
+        context.log.info(f"✅ Duration features added")
+    else:
+        context.log.warning(f"⚠️  'duration_ms' column not found")
     
     positive_pct = df['verdict'].mean() * 100
+    context.log.info(f"✅ Final shape: {df.shape}")
     context.log.info(f"Positive class (popular): {positive_pct:.2f}%")
+    context.log.info(f"Verdict value counts:\n{df['verdict'].value_counts()}")
     
     # Save readable copy
     project_root = _find_project_root()
@@ -164,7 +255,6 @@ def spotify_cleaned(context, df: pd.DataFrame) -> Output[pd.DataFrame]:
         },
     )
 
-
 # -----------------------------------------------------------
 # 3. Feature engineering
 # -----------------------------------------------------------
@@ -175,6 +265,13 @@ def spotify_cleaned(context, df: pd.DataFrame) -> Output[pd.DataFrame]:
 )
 def spotify_features(context, df: pd.DataFrame) -> Output[FeatureSet]:
     """Prepare features for modeling: one-hot encode genre, drop unnecessary columns."""
+    
+    context.log.info(f"🔍 DIAGNOSTIC START: Input shape: {df.shape}")
+    context.log.info(f"Columns in input: {list(df.columns)}")
+    context.log.info(f"Rows in input: {len(df)}")
+    
+    if len(df) == 0:
+        raise ValueError("❌ Input dataframe is empty! Something went wrong in earlier steps.")
     
     # Columns to drop for modeling
     drop_cols = [
@@ -188,23 +285,44 @@ def spotify_features(context, df: pd.DataFrame) -> Output[FeatureSet]:
     
     # Drop only columns that exist
     cols_to_drop = [col for col in drop_cols if col in df.columns]
+    context.log.info(f"Columns to drop: {cols_to_drop}")
+    
     features = df.drop(columns=cols_to_drop)
+    context.log.info(f"✅ After dropping columns: {features.shape}")
+    context.log.info(f"Remaining columns: {list(features.columns)}")
+    
+    if len(features) == 0:
+        raise ValueError("❌ Features dataframe is empty after dropping columns!")
     
     # One-hot encode genre if it exists
     if 'genre' in features.columns:
-        context.log.info(f"One-hot encoding 'genre' column with {features['genre'].nunique()} unique values")
+        context.log.info(f"🔄 One-hot encoding 'genre' column with {features['genre'].nunique()} unique values")
         one_hot = pd.get_dummies(features['genre'], prefix='genre', dtype=int)
         features = features.drop('genre', axis=1)
         features = pd.concat([features, one_hot], axis=1)
+        context.log.info(f"✅ After one-hot encoding genre: {features.shape}")
+    else:
+        context.log.info("ℹ️  No 'genre' column found")
     
     # Get target
+    if 'verdict' not in df.columns:
+        raise ValueError("❌ 'verdict' column not found in input dataframe!")
+    
     target = df['verdict'].astype(int)
+    context.log.info(f"✅ Target shape: {target.shape}")
+    context.log.info(f"Target value counts:\n{target.value_counts()}")
     
     # Sort columns for deterministic order
     features = features.sort_index(axis=1)
     
-    context.log.info(f"Features shape: {features.shape}")
+    context.log.info(f"✅ Final features shape: {features.shape}")
     context.log.info(f"Feature columns: {list(features.columns)}")
+    
+    # Check for NaN values
+    nan_count = features.isna().sum().sum()
+    if nan_count > 0:
+        context.log.warning(f"⚠️  WARNING: Found {nan_count} NaN values in features!")
+        context.log.info(f"NaN per column:\n{features.isna().sum()}")
     
     # Save readable copies
     project_root = _find_project_root()
@@ -236,7 +354,6 @@ def spotify_features(context, df: pd.DataFrame) -> Output[FeatureSet]:
             "readable_target": str(target_path),
         },
     )
-
 
 # -----------------------------------------------------------
 # 4. Train/Test split
